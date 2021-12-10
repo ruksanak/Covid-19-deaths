@@ -1,1 +1,1 @@
-# Covid-19-deaths
+# Covid-19
