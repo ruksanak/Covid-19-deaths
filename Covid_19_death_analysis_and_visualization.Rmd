@@ -1,0 +1,499 @@
+---
+title: "United States Covid & Pneumonia Deaths, and Covid Vaccine"
+subtitle: "CS544 Term Project Presentation (Prof. Kalathur, Fall 2021)"
+author: "Ruksana Khan, Radhika Gupta, and Manpreet Singh"
+date: "6th December, 2021"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: no
+  pdf_document:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+runtime: shiny
+---
+
+
+
+
+```{r global-options, include=FALSE}
+knitr::opts_chunk$set(fig.width=8, fig.height=6,
+                      echo=FALSE, warning=FALSE, message=FALSE)
+```
+```{r}
+library(tidyverse)
+library(scales)
+library(plotly)
+library(shiny)
+library(rsconnect)
+library(gridExtra)
+library(ggplot2)
+library(ggpubr)
+library(sampling)
+theme_set(theme_light())
+```
+
+# About the Data
+
+This data is from the Centers for Disease Control and Prevention - https://data.cdc.gov/. The analysis is performed on the CSV file “Provisional COVID-19 Deaths by Sex and Age & COVID-19”  and “Vaccinations in the United States” downloaded from the CDC. The former file contains Deaths due to either Covid-19 or Pneumonia or a combination of both in the period of Jan 2020 to Oct 2021. The other file contains overall data for vaccinations administered at various states for the same period.
+
+
+```{r Deaths number}
+# setwd(gsub(pattern = '/Users/ruksanakhan/Documents/CS 544/Project/Final items', replacement = '', x = getwd()))
+df <- read.csv("https://raw.githubusercontent.com/ruksanak/Covid-19-deaths/main/Deaths.csv")
+pop <- read.csv("https://raw.githubusercontent.com/ruksanak/Covid-19-deaths/main/Population.csv")
+vacc <- read.csv('https://raw.githubusercontent.com/ruksanak/Covid-19-deaths/main/Vaccination.csv')
+
+#preprocessing
+#Remove rows which has missing Month 
+df1 <- df[!(is.na(df$Month)),]
+
+#replace NA with 0s
+df1[is.na(df1)] = 0
+vacc[is.na(vacc)] = 0
+
+#remove all ages and all gender from the data
+
+df1<- df1[df1$Sex != "All Sexes", ]
+df1<- df1[df1$Age.Group != "All Ages", ]
+df1<- df1[df1$State != "United States", ]
+```
+
+```{r print}
+df_sub<- subset(df1, select = -c(Start.Date, End.Date, Data.As.Of, Group, Influenza.Deaths, Footnote, Pneumonia..Influenza..or.COVID.19.Deaths))
+
+head(as_tibble(df_sub))
+```
+
+
+
+```{r}
+#01. first the total numbers on the chart then the by percentage population 
+#Create the date 
+df1$date <- as.Date(ISOdate(year = df1$Year, month = df1$Month, day = 1))
+#Deaths in states
+Deaths_states_summary<-df1 %>%
+  group_by(State) %>%
+  summarize(Covid_deaths           = sum(COVID.19.Deaths),
+            Pneumonia_deaths       = sum(Pneumonia.Deaths),
+            Pneumonia_COVID_Deaths = sum(Pneumonia.and.COVID.19.Deaths)
+  )
+
+#remove the states where #deaths are less than 10000, avg monthly deaths ~500
+Deaths_states_summary <- Deaths_states_summary[Deaths_states_summary$Covid_deaths > 10000, ]
+```
+
+# State-wise analysis of deaths
+The below charts shows the number of deaths and deaths as a percentage of the population due to Covid-19/ Pneumonia/ a combination of both grouped by the state. For the below plots, states with <10k Covid-19 deaths have been excluded.
+
+## Number of deaths
+
+```{r Deaths by state, echo=FALSE}
+# Deaths_summary1 <- Deaths_summary[Deaths_summary$State == "Arizona", ]
+#Bar plot
+fig <- plot_ly(Deaths_states_summary,
+               x = ~State, 
+               y = ~Covid_deaths, 
+               type = 'bar', 
+               name = 'Total #Covid deaths'
+               )
+fig <- fig %>% add_trace(y = ~Pneumonia_deaths, name = 'Total #Pneumonia Death')
+fig <- fig %>% add_trace(y = ~Pneumonia_COVID_Deaths, name = 'Total #Pneumonia & COVID-19 Death')
+fig <- fig %>% layout(yaxis = list(title = 'Total death'), barmode = 'Group')
+fig
+```
+
+
+## Deaths as a percentage of the population
+
+```{r Percent of total population, echo=FALSE}
+death_popula <- merge(x=Deaths_states_summary[Deaths_states_summary$Covid_deaths > 10000, ], y=pop, by = "State")
+death_popula$Covid_perc <- round(death_popula$Covid_deaths/death_popula$Pop*100, 2)
+death_popula$Pneumonia_perc <- round(death_popula$Pneumonia_deaths/death_popula$Pop*100, 2)
+death_popula$Pneumonia_and_covid_perc <- round(death_popula$Pneumonia_COVID_Deaths/death_popula$Pop*100, 2)
+
+# %death Bar plot
+#Bar plot
+fig <- plot_ly(death_popula,
+               x = ~State, 
+               y = ~Covid_perc, 
+               type = 'bar', 
+               name = 'Covid Deaths Percent')
+fig <- fig %>% add_trace(y = ~Pneumonia_perc, name = 'Pneumonia Death Percent')
+fig <- fig %>% add_trace(y = ~Pneumonia_and_covid_perc, name = 'Pneumonia and Covid Death Percent')
+fig <- fig %>% layout(yaxis = list(title = 'Total Death/Population'), barmode = 'Group')
+fig
+```
+
+Note: Source for state-wise population: https://worldpopulationreview.com/states
+
+### Insights 
+1. While California and Texas are the highest in terms of the number of deaths, but Mississippi and Alabama are the highest in terms of Covid-19 deaths as a percentage of the population.
+2. Kentucky and Florida are the only two states that have higher Pneumonia deaths than Covid-19 deaths.
+
+# Distribution of Deaths across various attributes
+
+## Monthly distribution of deaths across the state, age group, and gender
+
+Below is a dashboard to look at the monthly distribution of deaths across the state, age group, and gender.
+
+```{r Monthly data}
+df2 <- df[!(is.na(df$Month)),]
+df2[is.na(df2)]=0
+# df2<- df1[df2$Sex != "All Sexes", ]
+# df2<- df2[df2$State != "United States", ]
+
+#summarize for drop down
+df2$date <- as.Date(ISOdate(year = df2$Year, month = df2$Month, day = 1))
+
+#summarize and Drop down
+Deaths_summary<-df2 %>%
+  group_by(State, date, Month, Age.Group, Sex) %>%
+  summarize(Covid_deaths           = sum(COVID.19.Deaths),
+            Pneumonia_deaths       = sum(Pneumonia.Deaths),
+            Pneumonia_COVID_Deaths = sum(Pneumonia.and.COVID.19.Deaths)
+  )
+
+states <- unique(Deaths_summary$State)
+age <- unique(Deaths_summary$Age.Group)
+Sex <- unique(Deaths_summary$Sex)
+
+### ui.r
+ui <- fluidPage(selectInput('States','Choose state', states),
+                selectInput('Age', 'Age', age),
+                selectInput('Sex', 'Sex', Sex),
+                plotlyOutput('Bar_plot')
+)
+
+### server.r
+server <- function(input, output) {
+  set.seed(100)  
+  output$Bar_plot <- renderPlotly({
+    #Deaths_summary1 <- Deaths_summary[Deaths_summary$State == input$States, ]
+    
+    Deaths_summary1<- Deaths_summary %>%
+      filter(State == input$States, (Age.Group == input$Age), (Sex == input$Sex))
+    
+    fig <- plot_ly(Deaths_summary1, x = ~date, y = ~Covid_deaths, type = 'bar', name = '#Deaths Due to Covid-19')
+    fig <- fig %>% add_trace(y = ~Pneumonia_deaths, name = '#Death Due to Pneumonia')
+    fig <- fig %>% add_trace(y = ~Pneumonia_COVID_Deaths, name = '#Death Due to Covid-19 and Pneumonia')
+    fig <- fig %>% layout(yaxis = list(title = 'Total #death'), xaxis = list(title = "Date", tickangle=90, type = "category"), barmode = 'Group')
+    fig
+    
+    
+  }
+  )
+}
+shinyApp(ui,server)
+```
+
+
+### Insights- 
+1. The first peak of Covid-19 deaths came in April 2020 with ~65K deaths across the United States in all age groups and gender. The second peak was more pronounced (avg ~101K deaths/Month) from Dec 2020 to Jan 2021. The third peak occurred in Aug - Sep 2021 (~54K).
+
+2. When the same distribution is plotted for the states with the highest #COVID-19 deaths (i.e. California and Texas), it is observed that the second peak was relatively more intense in California vs the 1st and 3rd peaks, while Texas imitates the distribution found for the overall country.
+
+
+
+## Frequency distribution of deaths across different combinations of state, gender, age and month
+
+The below plots illustrate the frequency distribution of #deaths across ~36K combinations of state, gender, age and month.
+The three frequency plots for deaths due to Covid-19, pneumonia and combination of COVID-19 & pneumonia exhibit a right-skewed normal distribution.	
+
+
+```{r Distribution in the data}
+df_remove_0<- df1[df1$COVID.19.Deaths != 0, ]
+df_remove_0_gr_2000 <- filter(df_remove_0, (df_remove_0$COVID.19.Deaths >= 50 & df_remove_0$COVID.19.Deaths<500))
+
+plot1 <- gghistogram(df_remove_0_gr_2000$COVID.19.Deaths, 
+            add = "mean", 
+            rug = FALSE,
+            bins = 50,
+            color = "lightblue",
+            fill= "lightblue") + labs(x = "#Covid Deaths", y= "Frequency")
+
+plot2 <- gghistogram(df_remove_0_gr_2000$Pneumonia.Deaths,
+            add = "mean", 
+            rug = FALSE,
+            bins = 50,
+            color = "lightgreen",
+            fill= "lightgreen") + labs(x = "#Pneumonia Deaths", y= "Frequency")
+
+plot3 <- gghistogram(df_remove_0_gr_2000$Pneumonia.and.COVID.19.Deaths,
+            add  = "mean", 
+            rug  = FALSE,
+            bins = 50,
+            color = "lightpink",
+            fill= "lightpink") + labs(x = "#Pneumonia and Covid-19 Deaths", y= "Frequency")
+
+grid.arrange(plot1, plot2, plot3, ncol=3)
+
+
+```
+
+# Central Limit Theorem & Sampling
+
+## Central Limit Theorem
+The Central Limit Theorem states that the distribution of independent, random samples tends towards a normal distribution, regardless of whether the underlying variable is normally distributed or not. We tried to prove the theorem using our data Covid-19 deaths - ~36K combinations of state, gender, age, and month. Below are histograms showing the sample means of 1000 random samples of sample sizes 10, 20, 30, and 40.
+
+As visible in the previous section, the distribution of COVID-19 deaths is right skewed, however, the below plots illustrate the CLM as the distribution of the means of 1000 random samples is normally distributed.
+
+
+
+```{r Center limit Theorum}
+Samples_mean <- function(data, samples, size){
+  samples1 = samples
+  samples1.size = size
+  xbar <- numeric(samples1)
+  set.seed(8046)
+  for (i in 1: samples1){
+    xbar[i] <- mean(sample(data, size))
+  }
+  x= xbar
+}
+
+set.seed(8046)
+
+xbar_10 <- Samples_mean(df_remove_0_gr_2000$COVID.19.Deaths, 1000, 10)
+df_xbar_10 <- as.data.frame(xbar_10)
+plot_10 <- ggplot(df_xbar_10, aes(x=xbar_10)) + 
+  geom_histogram(aes(y=..density..), colour="#E69F00", fill="#E69F00")+
+  geom_density(alpha=.2, fill="#E69F00")+
+  geom_vline(aes(xintercept=mean(xbar_10)),
+             color="blue", linetype="dashed", size=1)+
+  labs(title = "Sample Size = 10",y= "Density",x = "Sample Means")+ylim(c(0,0.035))
+
+xbar_20 <- Samples_mean(df_remove_0_gr_2000$COVID.19.Deaths, 1000, 20)
+df_xbar_20 <- as.data.frame(xbar_20)
+plot_20 <- ggplot(df_xbar_20, aes(x=xbar_20)) + 
+  geom_histogram(aes(y=..density..), colour="#56B4E9", fill="#56B4E9")+
+  geom_density(alpha=.2, fill="#56B4E9")+
+  geom_vline(aes(xintercept=mean(xbar_20)),
+             color="blue", linetype="dashed", size=1)+
+  labs(title = "Sample Size = 20",y= "Density",x = "Sample Means")+ylim(c(0,0.035))
+
+xbar_30 <- Samples_mean(df_remove_0_gr_2000$COVID.19.Deaths, 1000, 30)
+df_xbar_30 <- as.data.frame(xbar_30)
+plot_30 <- ggplot(df_xbar_30, aes(x=xbar_30)) + 
+  geom_histogram(aes(y=..density..), colour="#A4A4A4", fill="#A4A4A4")+
+  geom_density(alpha=.2, fill="#A4A4A4")+
+  geom_vline(aes(xintercept=mean(xbar_30)),
+             color="blue", linetype="dashed", size=1)+
+  labs(title = "Sample Size = 30",y= "Density",x = "Sample Means")+ylim(c(0,0.035))
+
+xbar_40 <- Samples_mean(df_remove_0_gr_2000$COVID.19.Deaths, 1000, 40)
+df_xbar_40 <- as.data.frame(xbar_40)
+plot_40 <- ggplot(df_xbar_40, aes(x=xbar_40)) + 
+  geom_histogram(aes(y=..density..), colour="lightpink", fill="lightpink")+
+  geom_density(alpha=.2, fill="lightpink")+
+  geom_vline(aes(xintercept=mean(xbar_40)),
+             color="blue", linetype="dashed", size=1)+
+  labs(title = "Sample Size = 40",y= "Density",x = "Sample Means")+ylim(c(0,0.035))
+
+grid.arrange(plot_10, plot_20, plot_30, plot_40, ncol=2)
+
+
+paste("population:", "Mean", round(mean(df_remove_0_gr_2000$COVID.19.Deaths),2), ",SD", round(sd(df_remove_0_gr_2000$COVID.19.Deaths),2))
+paste("Sample size of 10:", "Mean = ", round(mean(xbar_10),2), ",SD =", round(sd(xbar_10),2))
+paste("Sample size of 20:", "Mean = ", round(mean(xbar_20),2), ",SD = ", round(sd(xbar_20),2))
+paste("Sample size of 30:", "Mean = ", round(mean(xbar_30),2), ",SD = ", round(sd(xbar_30),2))
+paste("Sample size of 40:", "Mean = ", round(mean(xbar_40),2), ",SD = ", round(sd(xbar_40),2))
+
+```
+
+
+### Insights
+The average monthly covid-19 deaths across the state x age x Sex combinations is around 136.38.
+The above analysis provides two insights:
+The means of the 4 distributions (with different sample sizes of samples) are close to the mean of the data - ~137.
+As the sample size increases, the spread of the distribution reduces - hence increasing confidence in the mean
+
+
+## Sampling 
+
+### Deaths due to Covid 19 via Simple Random Sample Without Replacement, Systematic Sampling, Systematic Sampling with unequal probabilities , and Stratified Sampling
+Sampling refers to a way/technique to select a portion of the population that is representative, to perform further studies. There are multiple ways of sampling, including SRS, systematic sampling (with or without equal probabilities), and stratified sampling. For this analysis 5 states with the highest number of Covid-19 deaths have been chosen.
+
+
+```{r Sampling}
+# simple random sampling without replacement
+top_5_category <- tail(names(sort(table(df_remove_0_gr_2000$State))), 5)
+top_5_states <- subset(df_remove_0_gr_2000, df_remove_0_gr_2000$State %in% (top_5_category))
+
+Population <- ggplot(top_5_states, aes(x=COVID.19.Deaths)) + 
+  geom_histogram(aes(y=..density..), colour="coral", fill="coral")+
+  geom_density(alpha=.2, fill="coral")+
+  geom_vline(aes(xintercept=mean(COVID.19.Deaths)),
+             color="blue", linetype="dashed", size=1)+
+  labs(title = "Population",y= "Density",x = "#Covid-19 Deaths")+ylim(c(0,0.01))
+
+# Population <- gghistogram(top_5_states$COVID.19.Deaths, 
+#             add = "mean", rug = FALSE,
+#             color = "coral",
+#             fill= "coral") + labs(x = "#Covid-19 Deaths") + ggtitle("Population")
+
+#simple random sampling without replacement
+s <- srswor(50, nrow(top_5_states))
+rows <- (1:nrow(top_5_states))[s!=0]
+#since it is without replacement there won't be repetition
+rows <- rep(rows, s[s != 0])
+#Show the sample drawn using simple random sampling without replacement
+set.seed(8046)
+sample.1 <- top_5_states[rows, ]
+sample.1 <- sample.1[!(is.na(sample.1$COVID.19.Deaths)),]
+
+#systematic sampling
+N <- nrow(top_5_states)
+n <- 50
+#items in each group
+k <- ceiling(N/n)
+set.seed(8046)
+#random items from first group
+r <- sample(k, 1)
+#select every rth element 
+s<- seq(r, by=k, length = n)
+sample.2 <- top_5_states[s, ]
+sample.2 <- sample.2[!(is.na(sample.2$COVID.19.Deaths)),]
+
+
+#systematic sampling i inclusion probability - with unequal probabilities
+set.seed(8046)
+pik <- inclusionprobabilities(top_5_states$COVID.19.Deaths, 50)
+
+s <- UPsystematic(pik)
+sample.3 <- top_5_states[s!=0, ]
+
+#Strata 
+set.seed(8046)
+top_5_states <- top_5_states[order(top_5_states$State),]
+freq <- table(top_5_states$State)
+st.sizes <- round(50 * freq /sum(freq))
+st <- strata(top_5_states, stratanames = c("State"),
+             size = st.sizes,
+             method = "srswor")
+sample.4 <- getdata(top_5_states, st)
+
+sample_list <- list(sample.1$COVID.19.Deaths, sample.2$COVID.19.Deaths, sample.3$COVID.19.Deaths, sample.4$COVID.19.Deaths)
+sample_lis_1 <-list(sample.1, sample.2, sample.3, sample.4)
+
+title_list <- list( "Simple Random Sampling","Systematic Sampling", "Systematic Sampling w Unequal Prob", "Stratified Sampling")
+fill_col <- c('pink','yellow','green','blue')
+
+plot <- list()
+for (i in 1: length(sample_lis_1)){
+  # plot[[i]] <- gghistogram(sample_list[[i]],
+  #                       add = "mean", rug = FALSE,
+  #                       color = fill_col[[i]],
+  #                       fill= fill_col[[i]]) + labs(x = "#Covid-19 Death") + ggtitle(title_list[[i]])
+  
+  df_sample <- as.data.frame(sample_lis_1[[i]])
+  plot[[i]] <- ggplot(df_sample, aes(x=COVID.19.Deaths)) +
+  geom_histogram(aes(y=..density..), colour=fill_col[[i]], fill=fill_col[[i]])+
+  geom_density(alpha=.2, fill=fill_col[[i]])+
+  geom_vline(aes(xintercept=mean(COVID.19.Deaths)),
+             color="blue", linetype="dashed", size=1)+
+  labs(title = title_list[[i]],y= "Density",x = "#Covid-19 Death")+ylim(c(0,0.01))
+  }
+grid.arrange(Population, plot[[1]], plot[[2]], plot[[3]], plot[[4]], ncol=2)
+```
+
+### Insights
+It is observed that systematic sampling and stratified sampling are the sampling methods that most resemble the population distribution.
+
+
+# State-wise analysis of vaccines
+The below charts shows the number of vaccines administered at various States
+
+## Number of vaccines
+
+```{r Vaccines by state, echo=FALSE}
+fig <- plot_ly(vacc, x = ~Total.Doses.Administered.by.State.where.Administered, y = ~State.Territory.Federal.Entity, type = 'bar', orientation = 'h')%>% 
+  layout(yaxis = list(categoryorder = "total ascending", title = 'State/Territory'), xaxis = list(title = 'Doses administered by the State'))
+fig
+```
+### Insights 
+1. California state administered most doses in the US while Wyoming administered quite less doses.
+2. California, Florida and Texas were the top 3 states to administer most doses.
+
+
+
+## Doses administered by the state per 100K population
+```{r Vaccines by state per 100K population, echo=FALSE}
+fig <- plot_ly(vacc, x = ~Doses.Administered.per.100k.by.State.where.Administered, y = ~State.Territory.Federal.Entity, type = 'bar', orientation = 'h')%>% 
+  layout(yaxis = list(categoryorder = "total ascending"), xaxis = list(title = 'Doses administered per 100K population'))
+fig
+```
+
+### Insights
+1. Taking population into the account, Republic of Palau administered 176K doses for every 100K population
+2. Taking population into the account, Republic of Palau administered most doses for every 100K population and Marshall Islands administered least doses per 100K population.
+3. We had seen in the previous section, that the COVID-19 deaths per capita were highest for Mississippi & Alabama In this chart, we can see that the vaccination doses per 100K population are among the lowest for both Mississippi & Alabama. 
+
+## Doses administered by the state for different age groups per 100K population
+```{r Doses administered by the state for different age groups, echo=FALSE}
+fig <- plot_ly(vacc, x = ~State.Territory.Federal.Entity, y = ~Doses.Administered.per.100k.by.State.where.Administered, type = 'scatter',mode = 'markers', name = 'Doses Administered per 100K population')
+fig <- fig %>% add_trace(y = ~Doses.Administered.per.100k.of.12..pop.by.State.where.Administered, mode = 'markers',name = 'Doses Administered per 100K of 12+ population')
+fig <- fig %>% add_trace(y = ~X18..Doses.Administered.per.100K.by.State.where.Administered, mode = 'markers', name = 'Doses Administered per 100K of 18+ population')
+fig <- fig %>% add_trace(y = ~Doses.Administered.per.100k.of.65..pop.by.State.where.Administered, mode = 'markers',name = 'Doses Administered per 100K of 65+ population')
+fig <- fig %>% layout(yaxis = list(title = 'Doses Administered'), xaxis = list(title = "State"))
+fig
+```
+
+### Insights
+1. For nearly every state, doses administered per 100K population  of 65+ was highest when compared to other age groups
+2. Marshall Islands only administered 23957 doses for every 100K of 65+ population.
+3. Vermont administered 231,034 doses for every 100K of 65+ population.
+
+
+## Percentage of population across various ages innoculated with atleast one dose
+```{r Percentage of population across various ages innoculated with atleast oen dose, echo=FALSE}
+fig <- plot_ly(vacc, x = ~State.Territory.Federal.Entity, y = ~Percent.of.Total.Pop.with.at.least.One.Dose.by.State.of.Residence, type = 'scatter', mode = 'markers', name = 'Percentage of population innoculated with atleast one dose')
+fig <- fig %>% add_trace(y = ~Percent.of.12..Pop.with.at.least.One.Dose.by.State.of.Residence,mode = 'markers', name = 'Percentage of 12+ population innoculated with atleast one dose')
+fig <- fig %>% add_trace(y = ~Percent.of.18..Pop.Fully.Vaccinated.by.State.of.Residence, mode = 'markers', name = 'Percentage of 18+ population innoculated with atleast one dose')
+fig <- fig %>% add_trace(y = ~Percent.of.65..Pop.with.at.least.One.Dose.by.State.of.Residence,mode = 'markers', name = 'Percentage of 65+ population innoculated with atleast one dose')
+fig <- fig %>% layout(yaxis = list(title = 'Percentage of People Innoculated with atleast one Dose'), xaxis = list(title = "State"))
+fig
+```
+
+### Insights
+1. Republic of Palau was able to inoculate most of the 18+ population
+2. Idaho state was able to inoculate 0% of 12+ population.
+3. Most of the states were able to inoculate atleast 80% of 65+ population
+
+
+## Number of people vaccinated using vaccines manufactured by different manufacturers
+```{r Number of people vaccinated using vaccines manufactured by different manufacturers, echo=FALSE}
+library(shiny)
+library(plotly)
+ui <- fluidPage(selectInput('States','Choose state', vacc$State.Territory.Federal.Entity),
+                plotlyOutput('Bar_plot'))
+server <- function(input, output) {
+  set.seed(42)  
+  output$Bar_plot <- renderPlotly({
+    data1<- vacc %>%
+      filter(State.Territory.Federal.Entity == input$States)
+    fig <- plot_ly(data1, x = ~State.Territory.Federal.Entity, y = ~People.Fully.Vaccinated.Moderna.Resident, type = 'bar', name = 'Fully Vaccinated | Moderna')
+    fig <- fig %>% add_trace(y = ~People.Fully.Vaccinated.Pfizer.Resident, name = 'Fully Vaccinated | Pfizer')
+    fig <- fig %>% add_trace(y = ~People.Fully.Vaccinated.Janssen.Resident, name = 'Fully Vaccinated | Jannsen')
+    fig <- fig %>% add_trace(y = ~People.Fully.Vaccinated.Unknown.2.dose.manufacturer.Resident, name = 'Fully Vaccinated | Unknown')
+    fig <- fig %>% layout(yaxis = list(title = 'Total Vaccinated People'), xaxis = list(title = "Vaccine Manufacturer"), barmode = 'Group')
+    fig
+  }
+  )
+}
+shinyApp(ui,server)
+```
+
+# Conclusion 
+
+The data set for monthly deaths due to COVID-19 helped identify Mississippi and Alabama as the worst affected states (with the highest deaths per unit population). The vaccination administered dataset helped us identify California and Florida are the states where most doses of the vaccines were administered.It was also found from the vaccination dataset that the vaccinations per 100K population in these states were among the lowest (suggesting a correlation). 
+
+There were three peaks of COVID-19 in the US - 1) Apr 2020; 2) Dec 2020-Jan 2021; 3) Aug-Sep 2021.
+
+Further, it was observed that the frequency distribution of monthly deaths due to COVID-19 and/or pneumonia followed a normal curve (right-skewed), and follows the Central Limit Theorem.
+
+
